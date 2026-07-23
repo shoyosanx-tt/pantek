@@ -28,12 +28,29 @@ jobs:
         shell: bash
         run: |
           URL="${{ github.event.client_payload.gofile_url || inputs.gofile_url }}"
-          echo "url=$URL" >> $GITHUB_OUTPUT
-          echo "file_id=$(echo $URL | grep -oP '(?<=file/)[a-zA-Z0-9]+')" >> $GITHUB_OUTPUT
+          FILE_ID=$(echo "$URL" | grep -oP '[a-zA-Z0-9]{12,}')
+          echo "file_id=$FILE_ID" >> $GITHUB_OUTPUT
 
       - name: Download video from Gofile
+        shell: bash
         run: |
-          curl -L "https://gofile.io/d/${{ steps.parse.outputs.file_id }}" -o input.mp4
+          FILE_ID="${{ steps.parse.outputs.file_id }}"
+          # Get direct download link via Gofile API
+          INFO=$(curl -s "https://api.gofile.io/v2/files/$FILE_ID")
+          echo "API response: $INFO"
+          DL_LINK=$(echo "$INFO" | python -c "
+import sys, json
+data = json.load(sys.stdin)
+contents = list(data.get('data', {}).get('contents', {}).values())
+if contents:
+    print(contents[0].get('link', ''))
+")
+          if [ -z "$DL_LINK" ]; then
+            # Fallback: try direct download page
+            DL_LINK="https://gofile.io/download/$FILE_ID"
+          fi
+          echo "Downloading from: $DL_LINK"
+          curl -L -o input.mp4 "$DL_LINK"
 
       - name: Run patcher
         run: python patcher.py input.mp4 output.mp4
@@ -43,12 +60,11 @@ jobs:
         shell: bash
         run: |
           response=$(curl -s -F "file=@output.mp4" "https://store1.gofile.io/uploadFile")
-          echo "resp=$response"
           link=$(echo "$response" | python -c "import sys,json; print(json.load(sys.stdin)['data']['downloadPage'])")
           echo "result_link=$link" >> $GITHUB_OUTPUT
+          echo "Hasil upload: $link"
 
       - name: Save result link
         shell: bash
         run: |
           echo '${{ steps.upload.outputs.result_link }}' > result.txt
-          cat result.txt
